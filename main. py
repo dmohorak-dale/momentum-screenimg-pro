@@ -37,22 +37,22 @@ def read_root():
 @app.post("/api/screen")
 def screen_stocks(request: ScreenRequest):
     results = []
-    
+
     for ticker in request.tickers:
         ticker = ticker.strip().upper()
         try:
             stock = yf.Ticker(ticker)
             df = stock.history(period=request.period)
-            
+
             if df.empty or len(df) < 50:
                 continue
-                
+
             current_price = float(df['Close'].iloc[-1])
-            
+
             # Gleitende Durchschnitte berechnen
             sma_50 = float(df['Close'].rolling(window=50).mean().iloc[-1]) if len(df) >= 50 else None
             sma_200 = float(df['Close'].rolling(window=200).mean().iloc[-1]) if len(df) >= 200 else None
-            
+
             # Momentum / Performance-Kennzahlen (z.B. 3-Monats-Momentum / ca. 63 Handelstage)
             lookback_days = 63
             if len(df) >= lookback_days:
@@ -60,7 +60,7 @@ def screen_stocks(request: ScreenRequest):
                 momentum_3m = ((current_price - past_price) / past_price) * 100
             else:
                 momentum_3m = None
-                
+
             # 30-Tage Volatilität (annualisiert)
             returns = df['Close'].pct_change().dropna()
             volatility_30d = float(returns.tail(30).std() * np.sqrt(252) * 100) if len(returns) >= 30 else None
@@ -69,20 +69,27 @@ def screen_stocks(request: ScreenRequest):
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi_14 = float(100 - (100 / (1 + rs))).iloc[-1] if not rs.empty else None
+            rs = gain / loss.replace(0, np.nan)
+
+            if not rs.empty:
+                last_rs = rs.iloc[-1]
+                if pd.notna(last_rs) and last_rs != 0:
+                    rsi_14 = float(100 - (100 / (1 + last_rs)))
+                else:
+                    rsi_14 = None
+            else:
+                rsi_14 = None
 
             results.append({
                 "ticker": ticker,
                 "price": round(current_price, 2),
-                "sma_50": round(sma_50, 2) if sma_50 else None,
-                "sma_200": round(sma_200, 2) if sma_200 else None,
+                "sma_50": round(sma_50, 2) if sma_50 is not None else None,
+                "sma_200": round(sma_200, 2) if sma_200 is not None else None,
                 "momentum_3m_pct": round(momentum_3m, 2) if momentum_3m is not None else None,
                 "volatility_30d_pct": round(volatility_30d, 2) if volatility_30d is not None else None,
                 "rsi_14": round(rsi_14, 2) if rsi_14 is not None else None
-            }
-            )
-        except Exception as e:
+            })
+        except Exception:
             # Fehler bei einzelnen Tickers überspringen, aber protokollieren
             continue
 
